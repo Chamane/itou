@@ -20,7 +20,7 @@ from itou.utils.address.departments import DEPARTMENT_TO_REGION, DEPARTMENTS
 
 
 # FIXME
-ENABLE_WIP_MODE = False
+ENABLE_WIP_MODE = True
 WIP_MODE_ROWS_PER_TABLE = 50
 
 # Bench results for self.populate_diagnostics()
@@ -57,6 +57,12 @@ def get_choice(choices, key):
 def get_siae_first_join_date(siae):
     if siae.siaemembership_set.exists():
         return siae.siaemembership_set.order_by("joined_at").first().joined_at
+    return None
+
+
+def get_org_first_join_date(org):
+    if org.prescribermembership_set.exists():
+        return org.prescribermembership_set.order_by("joined_at").first().joined_at
     return None
 
 
@@ -114,6 +120,38 @@ class MetabaseDatabaseCursor:
         self.conn.commit()
         self.cur.close()
         self.conn.close()
+
+
+def get_address_columns():
+    return [
+        {
+            "name": "adresse_ligne_1",
+            "type": "varchar",
+            "comment": "Première ligne adresse",
+            "lambda": lambda o: o.address_line_1,
+        },
+        {
+            "name": "adresse_ligne_2",
+            "type": "varchar",
+            "comment": "Seconde ligne adresse",
+            "lambda": lambda o: o.address_line_2,
+        },
+        {"name": "code_postal", "type": "varchar", "comment": "Code postal", "lambda": lambda o: o.post_code},
+        {"name": "ville", "type": "varchar", "comment": "Ville", "lambda": lambda o: o.city},
+        {"name": "département", "type": "varchar", "comment": "Département", "lambda": lambda o: o.department},
+        {
+            "name": "nom_département",
+            "type": "varchar",
+            "comment": "Nom complet du département",
+            "lambda": lambda o: DEPARTMENTS.get(o.department),
+        },
+        {
+            "name": "région",
+            "type": "varchar",
+            "comment": "Région",
+            "lambda": lambda o: DEPARTMENT_TO_REGION.get(o.department),
+        },
+    ]
 
 
 class Command(BaseCommand):
@@ -205,43 +243,9 @@ class Command(BaseCommand):
                 "comment": "Source des données de la structure",
                 "lambda": lambda o: get_choice(choices=Siae.SOURCE_CHOICES, key=o.source),
             },
-            {
-                "name": "adresse_ligne_1",
-                "type": "varchar",
-                "comment": "Première ligne adresse",
-                "lambda": lambda o: o.address_line_1,
-            },
-            {
-                "name": "adresse_ligne_2",
-                "type": "varchar",
-                "comment": "Seconde ligne adresse",
-                "lambda": lambda o: o.address_line_2,
-            },
-            {
-                "name": "code_postal",
-                "type": "varchar",
-                "comment": "Code postal de la structure",
-                "lambda": lambda o: o.post_code,
-            },
-            {"name": "ville", "type": "varchar", "comment": "Ville de la structure", "lambda": lambda o: o.city},
-            {
-                "name": "département",
-                "type": "varchar",
-                "comment": "Département de la structure",
-                "lambda": lambda o: o.department,
-            },
-            {
-                "name": "nom_département",
-                "type": "varchar",
-                "comment": "Nom complet du département de la structure",
-                "lambda": lambda o: DEPARTMENTS[o.department],
-            },
-            {
-                "name": "région",
-                "type": "varchar",
-                "comment": "Région de la structure",
-                "lambda": lambda o: DEPARTMENT_TO_REGION[o.department],
-            },
+        ]
+        table_columns += get_address_columns()
+        table_columns += [
             {
                 "name": "date_inscription",
                 "type": "date",
@@ -304,63 +308,33 @@ class Command(BaseCommand):
                 "comment": "Organisation habilitée par le préfet",
                 "lambda": lambda o: o.is_authorized,
             },
-            # DNRY address vs structure
-            # DNRY dpt/region in many places
+        ]
+        table_columns += get_address_columns()
+        table_columns += [
             {
-                "name": "adresse_ligne_1",
-                "type": "varchar",
-                "comment": "Première ligne adresse",
-                "lambda": lambda o: o.address_line_1,
+                "name": "date_inscription",
+                "type": "date",
+                "comment": "Date inscription du premier compte prescripteur",
+                "lambda": get_org_first_join_date,
             },
             {
-                "name": "adresse_ligne_2",
-                "type": "varchar",
-                "comment": "Seconde ligne adresse",
-                "lambda": lambda o: o.address_line_2,
+                "name": "total_membres",
+                "type": "integer",
+                "comment": "Nombre de comptes prescripteurs rattachés à cette organisation",
+                "lambda": lambda o: o.members.count(),
             },
-            {"name": "code_postal", "type": "varchar", "comment": "Code postal", "lambda": lambda o: o.post_code},
-            {"name": "ville", "type": "varchar", "comment": "Ville", "lambda": lambda o: o.city},
-            {"name": "département", "type": "varchar", "comment": "Département", "lambda": lambda o: o.department},
-            # {
-            #     "name": "nom_département",
-            #     "type": "varchar",
-            #     "comment": "Nom complet du département",
-            #     "lambda": lambda o: DEPARTMENTS[o.department],
-            # },
-            # {
-            #     "name": "région",
-            #     "type": "varchar",
-            #     "comment": "Région",
-            #     "lambda": lambda o: DEPARTMENT_TO_REGION[o.department],
-            # },
-            # {
-            #     "name": "date_inscription",
-            #     "type": "date",
-            #     "comment": "Date inscription du premier compte employeur",
-            #     "lambda": get_siae_first_join_date,
-            # },
-            # {
-            #     "name": "total_membres",
-            #     "type": "integer",
-            #     "comment": "Nombre de comptes employeur rattachés à la structure",
-            #     "lambda": lambda o: o.members.count(),
-            # },
-            # {
-            #     "name": "total_candidatures",
-            #     "type": "integer",
-            #     "comment": "Nombre de candidatures dont la structure est destinataire",
-            #     # FIXME ugly af
-            #     "lambda": lambda o: JobApplication.objects.filter(to_siae_id=o.id).count(),
-            # },
-            # {
-            #     "name": "total_embauches",
-            #     "type": "integer",
-            #     "comment": "Nombre de candidatures en état accepté dont la structure est destinataire",
-            #     # FIXME ugly af
-            #     "lambda": lambda o: JobApplication.objects.filter(
-            #         to_siae_id=o.id, state=JobApplicationWorkflow.STATE_ACCEPTED
-            #     ).count(),
-            # },
+            {
+                "name": "total_candidatures",
+                "type": "integer",
+                "comment": "Nombre de candidatures émises par cette organisation",
+                "lambda": lambda o: o.jobapplication_set.count(),
+            },
+            {
+                "name": "total_embauches",
+                "type": "integer",
+                "comment": "Nombre de candidatures en état accepté émises par cette organisation",
+                "lambda": lambda o: o.jobapplication_set.filter(state=JobApplicationWorkflow.STATE_ACCEPTED).count(),
+            },
             # {
             #     "name": "total_candidatures_nouvelles",
             #     "type": "integer",
@@ -397,25 +371,36 @@ class Command(BaseCommand):
             {
                 "name": "type",
                 "type": "varchar",
-                "comment": "Type de la candidature (auto-prescription, candidature autonome, candidature via prescripteur)",
+                "comment": (
+                    "Type de la candidature (auto-prescription, candidature autonome, candidature via prescripteur)"
+                ),
                 "lambda": lambda o: get_choice(choices=SENDER_KIND_CHOICES, key=o.sender_kind),
             },
             {
                 "name": "sous_type",
                 "type": "varchar",
-                "comment": "Sous-type de la candidature (auto-prescription par EI, ACI... candidature autonome, candidature via prescripteur PE, ML...)",
+                "comment": (
+                    "Sous-type de la candidature (auto-prescription par EI, ACI..."
+                    " candidature autonome, candidature via prescripteur PE, ML...)"
+                ),
                 "lambda": get_job_application_sub_type,
             },
             {
                 "name": "délai_prise_en_compte",
                 "type": "interval",
-                "comment": "Temps écoulé rétroactivement de état nouveau à état étude si la candidature est passée par ces états",
+                "comment": (
+                    "Temps écoulé rétroactivement de état nouveau à état étude"
+                    " si la candidature est passée par ces états"
+                ),
                 "lambda": get_ja_time_spent_from_new_to_processing,
             },
             {
                 "name": "délai_de_réponse",
                 "type": "interval",
-                "comment": "Temps écoulé rétroactivement de état nouveau à état accepté ou refusé si la candidature est passée par ces états",
+                "comment": (
+                    "Temps écoulé rétroactivement de état nouveau à état accepté"
+                    " ou refusé si la candidature est passée par ces états"
+                ),
                 "lambda": get_ja_time_spent_from_new_to_accepted_or_refused,
             },
             {
