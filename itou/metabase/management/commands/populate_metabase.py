@@ -4,6 +4,7 @@ FIXME
 
 """
 import logging
+from datetime import datetime, timezone
 
 import psycopg2
 from django.conf import settings
@@ -101,6 +102,14 @@ def get_ja_time_spent_from_new_to_accepted_or_refused(ja):
         assert accepted_or_refused_timestamp > new_timestamp
         time_spent_from_new_to_accepted_or_refused = accepted_or_refused_timestamp - new_timestamp
         return time_spent_from_new_to_accepted_or_refused
+    return None
+
+
+def get_timedelta_since_org_last_job_application(org):
+    last_job_application = org.jobapplication_set.order_by("-created_at").first()
+    if last_job_application:
+        now = datetime.now(timezone.utc)
+        return now - last_job_application.created_at
     return None
 
 
@@ -335,15 +344,14 @@ class Command(BaseCommand):
                 "comment": "Nombre de candidatures en état accepté émises par cette organisation",
                 "lambda": lambda o: o.jobapplication_set.filter(state=JobApplicationWorkflow.STATE_ACCEPTED).count(),
             },
-            # {
-            #     "name": "total_candidatures_nouvelles",
-            #     "type": "integer",
-            #     "comment": "Nombre de candidatures en état nouveau dont la structure est destinataire",
-            #     # FIXME ugly af
-            #     "lambda": lambda o: JobApplication.objects.filter(
-            #         to_siae_id=o.id, state=JobApplicationWorkflow.STATE_NEW
-            #     ).count(),
-            # },
+            {
+                "name": "temps_écoulé_depuis_dernière_candidature",
+                "type": "interval",
+                "comment": (
+                    "Temps écoulé depuis la dernière création de candidature"
+                ),
+                "lambda": get_timedelta_since_org_last_job_application,
+            },
         ]
 
         # FIXME select_related for better perf
