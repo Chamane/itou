@@ -347,9 +347,7 @@ class Command(BaseCommand):
             {
                 "name": "temps_écoulé_depuis_dernière_candidature",
                 "type": "interval",
-                "comment": (
-                    "Temps écoulé depuis la dernière création de candidature"
-                ),
+                "comment": "Temps écoulé depuis la dernière création de candidature",
                 "lambda": get_timedelta_since_org_last_job_application,
             },
         ]
