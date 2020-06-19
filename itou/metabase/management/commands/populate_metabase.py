@@ -4,7 +4,7 @@ FIXME
 
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 
 import psycopg2
 from django.conf import settings
@@ -147,6 +147,24 @@ def get_timedelta_since_org_last_job_application(org):
     return None
 
 
+def get_user_age_in_years(user):
+    if user.birthdate:
+        return date.today().year - user.birthdate.year
+    return None
+
+
+def get_latest_diagnosis(job_seeker):
+    assert job_seeker.is_job_seeker
+    return job_seeker.eligibility_diagnoses.order_by("-created_at").first()
+
+
+def get_latest_diagnosis_creation_date(job_seeker):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        return latest_diagnosis.created_at
+    return None
+
+
 class MetabaseDatabaseCursor:
     def __enter__(self):
         self.conn = psycopg2.connect(
@@ -165,34 +183,39 @@ class MetabaseDatabaseCursor:
         self.conn.close()
 
 
-def get_address_columns():
+def get_address_columns(name_suffix="", comment_suffix=""):
     return [
         {
-            "name": "adresse_ligne_1",
+            "name": f"adresse_ligne_1{name_suffix}",
             "type": "varchar",
-            "comment": "Première ligne adresse",
+            "comment": f"Première ligne adresse{comment_suffix}",
             "lambda": lambda o: o.address_line_1,
         },
         {
-            "name": "adresse_ligne_2",
+            "name": f"adresse_ligne_2{name_suffix}",
             "type": "varchar",
-            "comment": "Seconde ligne adresse",
+            "comment": f"Seconde ligne adresse{comment_suffix}",
             "lambda": lambda o: o.address_line_2,
         },
-        {"name": "code_postal", "type": "varchar", "comment": "Code postal", "lambda": lambda o: o.post_code},
-        {"name": "ville", "type": "varchar", "comment": "Ville", "lambda": lambda o: o.city},
-        {"name": "département", "type": "varchar", "comment": "Département", "lambda": lambda o: o.department},
+        {"name": f"code_postal{name_suffix}", "type": "varchar", "comment": f"Code postal{comment_suffix}", "lambda": lambda o: o.post_code},
+        {"name": f"ville{name_suffix}", "type": "varchar", "comment": f"Ville{comment_suffix}", "lambda": lambda o: o.city},
+    ] + get_department_and_region_columns(name_suffix, comment_suffix)
+
+
+def get_department_and_region_columns(name_suffix="", comment_suffix="", custom_lambda=lambda o: o):
+    return [
+        {"name": f"département{name_suffix}", "type": "varchar", "comment": f"Département{comment_suffix}", "lambda": lambda o: custom_lambda(o).department},
         {
-            "name": "nom_département",
+            "name": f"nom_département{name_suffix}",
             "type": "varchar",
-            "comment": "Nom complet du département",
-            "lambda": lambda o: DEPARTMENTS.get(o.department),
+            "comment": f"Nom complet du département{comment_suffix}",
+            "lambda": lambda o: DEPARTMENTS.get(custom_lambda(o).department),
         },
         {
-            "name": "région",
+            "name": f"région{name_suffix}",
             "type": "varchar",
-            "comment": "Région",
-            "lambda": lambda o: DEPARTMENT_TO_REGION.get(o.department),
+            "comment": f"Région{comment_suffix}",
+            "lambda": lambda o: DEPARTMENT_TO_REGION.get(custom_lambda(o).department),
         },
     ]
 
@@ -287,7 +310,7 @@ class Command(BaseCommand):
                 "lambda": lambda o: get_choice(choices=Siae.SOURCE_CHOICES, key=o.source),
             },
         ]
-        table_columns += get_address_columns()
+        table_columns += get_address_columns(comment_suffix=" de la structure")
         table_columns += [
             {
                 "name": "date_inscription",
@@ -352,7 +375,7 @@ class Command(BaseCommand):
                 "lambda": lambda o: o.is_authorized,
             },
         ]
-        table_columns += get_address_columns()
+        table_columns += get_address_columns(comment_suffix=" de cette organisation")
         table_columns += [
             {
                 "name": "date_inscription",
@@ -467,25 +490,11 @@ class Command(BaseCommand):
                 "comment": "Nom de la structure destinaire de la candidature",
                 "lambda": lambda o: o.to_siae.display_name,
             },
-            {
-                "name": "département_structure",
-                "type": "varchar",
-                "comment": "Département de la structure destinaire de la candidature",
-                "lambda": lambda o: o.to_siae.department,
-            },
-            {
-                "name": "nom_département_structure",
-                "type": "varchar",
-                "comment": "Nom complet du département de la structure destinaire de la candidature",
-                "lambda": lambda o: DEPARTMENTS[o.to_siae.department],
-            },
-            {
-                "name": "région_structure",
-                "type": "varchar",
-                "comment": "Région de la structure destinaire de la candidature",
-                "lambda": lambda o: DEPARTMENT_TO_REGION[o.to_siae.department],
-            },
-        ]
+        ] + get_department_and_region_columns(
+            name_suffix="_structure",
+            comment_suffix=" de la structure destinaire de la candidature",
+            custom_lambda=lambda o: o.to_siae
+        )
 
         # FIXME select_related for better perf
         objects = JobApplication.objects.all()
@@ -498,10 +507,10 @@ class Command(BaseCommand):
         table_columns = [
             {"name": "id", "type": "integer", "comment": "ID du candidat", "lambda": lambda o: o.id},
             {
-                "name": "date_de_naissance",
-                "type": "date",
-                "comment": "Date de naissance du candidat",
-                "lambda": lambda o: o.birthdate,
+                "name": "age",
+                "type": "integer",
+                "comment": "Age du candidat en années",
+                "lambda": get_user_age_in_years,
             },
             {
                 "name": "date_inscription",
@@ -509,6 +518,15 @@ class Command(BaseCommand):
                 "comment": "Date inscription du candidat",
                 "lambda": lambda o: o.date_joined,
             },
+            {
+                "name": "dernière_connexion",
+                "type": "date",
+                "comment": "Date de dernière connexion au service du candidat",
+                "lambda": lambda o: o.last_login,
+            },
+        ]
+        table_columns += get_department_and_region_columns(comment_suffix=" du candidat")
+        table_columns += [
             {
                 "name": "total_candidatures",
                 "type": "integer",
@@ -526,6 +544,13 @@ class Command(BaseCommand):
                 "type": "integer",
                 "comment": "Nombre de diagnostics",
                 "lambda": lambda o: o.eligibility_diagnoses.count(),
+            },
+            # WIPP - dernier diagnostic
+            {
+                "name": "date_diagnostic",
+                "type": "date",
+                "comment": "Date du dernier diagnostic",
+                "lambda": get_latest_diagnosis_creation_date,
             },
         ]
 
