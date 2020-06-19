@@ -38,6 +38,15 @@ SENDER_KIND_CHOICES = (
     (JobApplication.SENDER_KIND_SIAE_STAFF, _("Auto-prescription")),
 )
 
+# Special fake adhoc organization designed to gather stats
+# of all prescriber accounts without organization.
+# Othersize organization stats would miss those accounts
+# contribution.
+# Of course this organization is *never* actually saved in db.
+ORG_OF_PRESCRIBERS_WITHOUT_ORG = PrescriberOrganization(
+    id=-1, name="Regroupement des prescripteurs sans organisation", kind="SANS-ORGANISATION", is_authorized=False
+)
+
 
 def chunks(l, n):
     """
@@ -62,9 +71,33 @@ def get_siae_first_join_date(siae):
 
 
 def get_org_first_join_date(org):
-    if org.prescribermembership_set.exists():
+    if org != ORG_OF_PRESCRIBERS_WITHOUT_ORG and org.prescribermembership_set.exists():
         return org.prescribermembership_set.order_by("joined_at").first().joined_at
     return None
+
+
+def get_org_members_count(org):
+    if org == ORG_OF_PRESCRIBERS_WITHOUT_ORG:
+        return get_user_model().objects.filter(is_prescriber=True, prescribermembership=None).count()
+    return org.members.count()
+
+
+def get_org_job_applications_count(org):
+    if org == ORG_OF_PRESCRIBERS_WITHOUT_ORG:
+        return JobApplication.objects.filter(
+            sender_kind=JobApplication.SENDER_KIND_PRESCRIBER, sender_prescriber_organization=None
+        ).count()
+    return org.jobapplication_set.count()
+
+
+def get_org_accepted_job_applications_count(org):
+    if org == ORG_OF_PRESCRIBERS_WITHOUT_ORG:
+        return JobApplication.objects.filter(
+            sender_kind=JobApplication.SENDER_KIND_PRESCRIBER,
+            sender_prescriber_organization=None,
+            state=JobApplicationWorkflow.STATE_ACCEPTED,
+        ).count()
+    return org.jobapplication_set.filter(state=JobApplicationWorkflow.STATE_ACCEPTED).count()
 
 
 def get_job_application_sub_type(ja):
@@ -106,10 +139,11 @@ def get_ja_time_spent_from_new_to_accepted_or_refused(ja):
 
 
 def get_timedelta_since_org_last_job_application(org):
-    last_job_application = org.jobapplication_set.order_by("-created_at").first()
-    if last_job_application:
-        now = datetime.now(timezone.utc)
-        return now - last_job_application.created_at
+    if org != ORG_OF_PRESCRIBERS_WITHOUT_ORG:
+        last_job_application = org.jobapplication_set.order_by("-created_at").first()
+        if last_job_application:
+            now = datetime.now(timezone.utc)
+            return now - last_job_application.created_at
     return None
 
 
@@ -330,19 +364,19 @@ class Command(BaseCommand):
                 "name": "total_membres",
                 "type": "integer",
                 "comment": "Nombre de comptes prescripteurs rattachés à cette organisation",
-                "lambda": lambda o: o.members.count(),
+                "lambda": get_org_members_count,
             },
             {
                 "name": "total_candidatures",
                 "type": "integer",
                 "comment": "Nombre de candidatures émises par cette organisation",
-                "lambda": lambda o: o.jobapplication_set.count(),
+                "lambda": get_org_job_applications_count,
             },
             {
                 "name": "total_embauches",
                 "type": "integer",
                 "comment": "Nombre de candidatures en état accepté émises par cette organisation",
-                "lambda": lambda o: o.jobapplication_set.filter(state=JobApplicationWorkflow.STATE_ACCEPTED).count(),
+                "lambda": get_org_accepted_job_applications_count,
             },
             {
                 "name": "temps_écoulé_depuis_dernière_candidature",
@@ -353,7 +387,7 @@ class Command(BaseCommand):
         ]
 
         # FIXME select_related for better perf
-        objects = PrescriberOrganization.objects.all()
+        objects = [ORG_OF_PRESCRIBERS_WITHOUT_ORG] + list(PrescriberOrganization.objects.all())
 
         self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
 
