@@ -4,7 +4,7 @@ FIXME
 
 """
 import logging
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 
 import psycopg2
 from django.conf import settings
@@ -197,14 +197,29 @@ def get_address_columns(name_suffix="", comment_suffix=""):
             "comment": f"Seconde ligne adresse{comment_suffix}",
             "lambda": lambda o: o.address_line_2,
         },
-        {"name": f"code_postal{name_suffix}", "type": "varchar", "comment": f"Code postal{comment_suffix}", "lambda": lambda o: o.post_code},
-        {"name": f"ville{name_suffix}", "type": "varchar", "comment": f"Ville{comment_suffix}", "lambda": lambda o: o.city},
+        {
+            "name": f"code_postal{name_suffix}",
+            "type": "varchar",
+            "comment": f"Code postal{comment_suffix}",
+            "lambda": lambda o: o.post_code,
+        },
+        {
+            "name": f"ville{name_suffix}",
+            "type": "varchar",
+            "comment": f"Ville{comment_suffix}",
+            "lambda": lambda o: o.city,
+        },
     ] + get_department_and_region_columns(name_suffix, comment_suffix)
 
 
 def get_department_and_region_columns(name_suffix="", comment_suffix="", custom_lambda=lambda o: o):
     return [
-        {"name": f"département{name_suffix}", "type": "varchar", "comment": f"Département{comment_suffix}", "lambda": lambda o: custom_lambda(o).department},
+        {
+            "name": f"département{name_suffix}",
+            "type": "varchar",
+            "comment": f"Département{comment_suffix}",
+            "lambda": lambda o: custom_lambda(o).department,
+        },
         {
             "name": f"nom_département{name_suffix}",
             "type": "varchar",
@@ -493,7 +508,7 @@ class Command(BaseCommand):
         ] + get_department_and_region_columns(
             name_suffix="_structure",
             comment_suffix=" de la structure destinaire de la candidature",
-            custom_lambda=lambda o: o.to_siae
+            custom_lambda=lambda o: o.to_siae,
         )
 
         # FIXME select_related for better perf
