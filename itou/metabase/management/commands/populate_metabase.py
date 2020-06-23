@@ -414,6 +414,33 @@ class Command(BaseCommand):
                 "lambda": lambda o: JobApplication.objects.filter(to_siae_id=o.id).count(),
             },
             {
+                "name": "total_auto_prescriptions",
+                "type": "integer",
+                "comment": "Nombre de candidatures de source employeur dont la structure est destinataire",
+                # FIXME ugly af
+                "lambda": lambda o: JobApplication.objects.filter(
+                    to_siae_id=o.id, sender_kind=JobApplication.SENDER_KIND_SIAE_STAFF
+                ).count(),
+            },
+            {
+                "name": "total_candidatures_autonomes",
+                "type": "integer",
+                "comment": "Nombre de candidatures de source candidat dont la structure est destinataire",
+                # FIXME ugly af
+                "lambda": lambda o: JobApplication.objects.filter(
+                    to_siae_id=o.id, sender_kind=JobApplication.SENDER_KIND_JOB_SEEKER
+                ).count(),
+            },
+            {
+                "name": "total_candidatures_via_prescripteur",
+                "type": "integer",
+                "comment": "Nombre de candidatures de source prescripteur dont la structure est destinataire",
+                # FIXME ugly af
+                "lambda": lambda o: JobApplication.objects.filter(
+                    to_siae_id=o.id, sender_kind=JobApplication.SENDER_KIND_PRESCRIBER
+                ).count(),
+            },
+            {
                 "name": "total_embauches",
                 "type": "integer",
                 "comment": "Nombre de candidatures en état accepté dont la structure est destinataire",
@@ -423,12 +450,21 @@ class Command(BaseCommand):
                 ).count(),
             },
             {
-                "name": "total_candidatures_nouvelles",
+                "name": "total_candidatures_non_traitées",
                 "type": "integer",
                 "comment": "Nombre de candidatures en état nouveau dont la structure est destinataire",
                 # FIXME ugly af
                 "lambda": lambda o: JobApplication.objects.filter(
                     to_siae_id=o.id, state=JobApplicationWorkflow.STATE_NEW
+                ).count(),
+            },
+            {
+                "name": "total_candidatures_en_étude",
+                "type": "integer",
+                "comment": "Nombre de candidatures en état étude dont la structure est destinataire",
+                # FIXME ugly af
+                "lambda": lambda o: JobApplication.objects.filter(
+                    to_siae_id=o.id, state=JobApplicationWorkflow.STATE_PROCESSING
                 ).count(),
             },
         ]
