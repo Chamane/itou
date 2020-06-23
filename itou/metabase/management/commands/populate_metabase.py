@@ -11,10 +11,11 @@ import psycopg2
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
+from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext, gettext_lazy as _
 from tqdm import tqdm
 
-from itou.eligibility.models import AdministrativeCriteria, EligibilityDiagnosis, SelectedAdministrativeCriteria
+from itou.eligibility.models import AdministrativeCriteria, EligibilityDiagnosis
 from itou.job_applications.models import JobApplication, JobApplicationWorkflow
 from itou.prescribers.models import PrescriberOrganization
 from itou.siaes.models import Siae
@@ -56,6 +57,14 @@ ORG_OF_PRESCRIBERS_WITHOUT_ORG = PrescriberOrganization(
 )
 
 
+def anonymize(value, salt):
+    """
+    Use a salted hash to anonymize sensitive ids,
+    mainly job_seeker id and job_application id.
+    """
+    return salted_hmac(salt, value, secret=settings.SECRET_KEY).hexdigest()
+
+
 def chunks(l, n):
     """
     Yield successive n-sized chunks from l.
@@ -69,7 +78,9 @@ def get_choice(choices, key):
     # Gettext fixes `can't adapt type '__proxy__'` error
     # due to laxy_gettext and psycopg2 not going well together.
     # See https://code.djangoproject.com/ticket/13965
-    return gettext(choices[key])
+    if key in choices:
+        return gettext(choices[key])
+    return None
 
 
 def get_siae_first_join_date(siae):
@@ -489,7 +500,12 @@ class Command(BaseCommand):
         table_name = "candidatures"
 
         table_columns = [
-            {"name": "id", "type": "varchar", "comment": "ID de la candidature", "lambda": lambda o: o.id},
+            {
+                "name": "id_anonymisé",
+                "type": "varchar",
+                "comment": "ID anonymisé de la candidature",
+                "lambda": lambda o: anonymize(o.id, salt="job_application.id"),
+            },
             {
                 "name": "date_candidature",
                 "type": "date",
@@ -538,10 +554,16 @@ class Command(BaseCommand):
                 "lambda": get_ja_time_spent_from_new_to_accepted_or_refused,
             },
             {
-                "name": "id_candidat",
-                "type": "integer",
-                "comment": "ID du candidat",
-                "lambda": lambda o: o.job_seeker_id,
+                "name": "motif_de_refus",
+                "type": "varchar",
+                "comment": "Motif de refus de la candidature",
+                "lambda": lambda o: get_choice(choices=JobApplication.REFUSAL_REASON_CHOICES, key=o.refusal_reason),
+            },
+            {
+                "name": "id_candidat_anonymisé",
+                "type": "varchar",
+                "comment": "ID anonymisé du candidat",
+                "lambda": lambda o: anonymize(o.job_seeker_id, salt="job_seeker.id"),
             },
             {
                 "name": "id_structure",
@@ -576,7 +598,12 @@ class Command(BaseCommand):
         table_name = "candidats"
 
         table_columns = [
-            {"name": "id", "type": "integer", "comment": "ID du candidat", "lambda": lambda o: o.id},
+            {
+                "name": "id_anonymisé",
+                "type": "varchar",
+                "comment": "ID anonymisé du candidat",
+                "lambda": lambda o: anonymize(o.id, salt="job_seeker.id"),
+            },
             {
                 "name": "age",
                 "type": "integer",
@@ -674,79 +701,24 @@ class Command(BaseCommand):
             ]
 
         # FIXME select_related for better perf
-        objects = get_user_model().objects.filter(is_job_seeker=True).all()
-
-        self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
-
-    def populate_diagnostics(self):
-        table_name = "diagnostics"
-
-        table_columns = [
-            {"name": "id", "type": "integer", "comment": "ID du diagnostic", "lambda": lambda o: o.id},
-            {
-                "name": "id_candidat",
-                "type": "integer",
-                "comment": "ID du candidat",
-                "lambda": lambda o: o.job_seeker_id,
-            },
-            {
-                "name": "date_diagnostic",
-                "type": "date",
-                "comment": "Date du diagnostic",
-                "lambda": lambda o: o.created_at,
-            },
-        ]
-
-        # FIXME select_related for better perf
-        objects = EligibilityDiagnosis.objects.all()
-
-        self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
-
-    def populate_criteria(self):
-        table_name = "critères"
-
-        table_columns = [
-            {"name": "id", "type": "integer", "comment": "ID du critère administratif", "lambda": lambda o: o.id},
-            {
-                "name": "id_diagnostic",
-                "type": "integer",
-                "comment": "ID du diagnostic",
-                "lambda": lambda o: o.eligibility_diagnosis_id,
-            },
-            {
-                "name": "id_candidat",
-                "type": "integer",
-                "comment": "ID du candidat",
-                "lambda": lambda o: o.eligibility_diagnosis.job_seeker_id,
-            },
-            {
-                "name": "niveau_critère",
-                "type": "integer",
-                "comment": "Niveau du critère adminsitratif (1, 2 ou 3)",
-                "lambda": lambda o: o.administrative_criteria.level,
-            },
-            {
-                "name": "nom_critère",
-                "type": "varchar",
-                "comment": "Nom du critère administratif",
-                "lambda": lambda o: o.administrative_criteria.name,
-            },
-        ]
-
-        # FIXME select_related for better perf
-        objects = SelectedAdministrativeCriteria.objects.all()
+        objects = (
+            get_user_model()
+            .objects.filter(is_job_seeker=True)
+            .prefetch_related(
+                "job_applications", "eligibility_diagnoses", "eligibility_diagnoses__administrative_criteria"
+            )
+            .all()
+        )
 
         self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
 
     def populate_metabase(self):
         with MetabaseDatabaseCursor() as cur:
             self.cur = cur
-            self.populate_siaes()
-            self.populate_organisations()
             self.populate_job_applications()
             self.populate_job_seekers()
-            self.populate_diagnostics()
-            self.populate_criteria()
+            self.populate_siaes()
+            self.populate_organisations()
 
     def handle(self, **options):
         self.set_logger(options.get("verbosity"))
