@@ -5,6 +5,7 @@ FIXME
 """
 import logging
 from datetime import date, datetime, timezone
+from functools import partial
 
 import psycopg2
 from django.conf import settings
@@ -13,7 +14,7 @@ from django.core.management.base import BaseCommand
 from django.utils.translation import gettext, gettext_lazy as _
 from tqdm import tqdm
 
-from itou.eligibility.models import EligibilityDiagnosis, SelectedAdministrativeCriteria
+from itou.eligibility.models import AdministrativeCriteria, EligibilityDiagnosis, SelectedAdministrativeCriteria
 from itou.job_applications.models import JobApplication, JobApplicationWorkflow
 from itou.prescribers.models import PrescriberOrganization
 from itou.siaes.models import Siae
@@ -21,7 +22,7 @@ from itou.utils.address.departments import DEPARTMENT_TO_REGION, DEPARTMENTS
 
 
 # FIXME
-ENABLE_WIP_MODE = True
+ENABLE_WIP_MODE = False
 WIP_MODE_ROWS_PER_TABLE = 50
 
 # Bench results for self.populate_diagnostics()
@@ -38,9 +39,16 @@ SENDER_KIND_CHOICES = (
     (JobApplication.SENDER_KIND_SIAE_STAFF, _("Auto-prescription")),
 )
 
+# Different wording than the original EligibilityDiagnosis.AUTHOR_KIND_CHOICES
+AUTHOR_KIND_CHOICES = (
+    (EligibilityDiagnosis.AUTHOR_KIND_JOB_SEEKER, _("Demandeur d'emploi")),
+    (EligibilityDiagnosis.AUTHOR_KIND_PRESCRIBER, _("Prescripteur")),
+    (EligibilityDiagnosis.AUTHOR_KIND_SIAE_STAFF, _("Employeur")),
+)
+
 # Special fake adhoc organization designed to gather stats
 # of all prescriber accounts without organization.
-# Othersize organization stats would miss those accounts
+# Otherwise organization stats would miss those accounts
 # contribution.
 # Of course this organization is *never* actually saved in db.
 ORG_OF_PRESCRIBERS_WITHOUT_ORG = PrescriberOrganization(
@@ -162,6 +170,48 @@ def get_latest_diagnosis_creation_date(job_seeker):
     latest_diagnosis = get_latest_diagnosis(job_seeker)
     if latest_diagnosis:
         return latest_diagnosis.created_at
+    return None
+
+
+def get_latest_diagnosis_author_kind(job_seeker):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        return get_choice(choices=AUTHOR_KIND_CHOICES, key=latest_diagnosis.author_kind)
+    return None
+
+
+def get_latest_diagnosis_author_sub_kind(job_seeker):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        author_kind = get_choice(choices=AUTHOR_KIND_CHOICES, key=latest_diagnosis.author_kind)
+        if latest_diagnosis.author_kind == EligibilityDiagnosis.AUTHOR_KIND_SIAE_STAFF:
+            author_sub_kind = latest_diagnosis.author_siae.kind
+        elif latest_diagnosis.author_kind == EligibilityDiagnosis.AUTHOR_KIND_PRESCRIBER:
+            author_sub_kind = latest_diagnosis.author_prescriber_organization.kind
+        else:
+            raise ValueError("Unexpected latest_diagnosis.author_kind")
+        return f"{author_kind} {author_sub_kind}"
+    return None
+
+
+def get_latest_diagnosis_level1_criteria(job_seeker):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        return latest_diagnosis.administrative_criteria.level1().count()
+    return None
+
+
+def get_latest_diagnosis_level2_criteria(job_seeker):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        return latest_diagnosis.administrative_criteria.level2().count()
+    return None
+
+
+def get_latest_diagnosis_criteria(job_seeker, criteria_id):
+    latest_diagnosis = get_latest_diagnosis(job_seeker)
+    if latest_diagnosis:
+        return latest_diagnosis.administrative_criteria.filter(id=criteria_id).exists()
     return None
 
 
@@ -311,6 +361,12 @@ class Command(BaseCommand):
         table_columns = [
             {"name": "id", "type": "integer", "comment": "ID de la structure", "lambda": lambda o: o.id},
             {"name": "nom", "type": "varchar", "comment": "Nom de la structure", "lambda": lambda o: o.display_name},
+            {
+                "name": "description",
+                "type": "varchar",
+                "comment": "Description de la structure",
+                "lambda": lambda o: o.description,
+            },
             {
                 "name": "type",
                 "type": "varchar",
@@ -534,6 +590,12 @@ class Command(BaseCommand):
                 "lambda": lambda o: o.date_joined,
             },
             {
+                "name": "pe_connect",
+                "type": "boolean",
+                "comment": "Le candidat utilise PE Connect",
+                "lambda": lambda o: o.is_peamu,
+            },
+            {
                 "name": "dernière_connexion",
                 "type": "date",
                 "comment": "Date de dernière connexion au service du candidat",
@@ -560,14 +622,56 @@ class Command(BaseCommand):
                 "comment": "Nombre de diagnostics",
                 "lambda": lambda o: o.eligibility_diagnoses.count(),
             },
-            # WIPP - dernier diagnostic
             {
                 "name": "date_diagnostic",
                 "type": "date",
                 "comment": "Date du dernier diagnostic",
                 "lambda": get_latest_diagnosis_creation_date,
             },
+            {
+                "name": "type_auteur_diagnostic",
+                "type": "varchar",
+                "comment": "Type auteur du dernier diagnostic",
+                "lambda": get_latest_diagnosis_author_kind,
+            },
+            {
+                "name": "sous_type_auteur_diagnostic",
+                "type": "varchar",
+                "comment": "Sous type auteur du dernier diagnostic",
+                "lambda": get_latest_diagnosis_author_sub_kind,
+            },
+            {
+                "name": "total_critères_niveau_1",
+                "type": "integer",
+                "comment": "Total critères de niveau 1 du dernier diagnostic",
+                "lambda": get_latest_diagnosis_level1_criteria,
+            },
+            {
+                "name": "total_critères_niveau_2",
+                "type": "integer",
+                "comment": "Total critères de niveau 2 du dernier diagnostic",
+                "lambda": get_latest_diagnosis_level2_criteria,
+            },
         ]
+        for criteria in AdministrativeCriteria.objects.order_by("id").all():
+            column_comment = (
+                criteria.name.replace("'", " ")
+                .replace("12-24", "12 à 24")
+                .replace("+", "plus de ")
+                .replace("-", "moins de ")
+                .strip()
+            )
+            # Deduplicate consecutive spaces.
+            column_comment = " ".join(column_comment.split())
+            column_name = column_comment.replace("(", "").replace(")", "").replace(" ", "_").lower()
+            table_columns += [
+                {
+                    "name": f"critère_n{criteria.level}_{column_name}",
+                    "type": "boolean",
+                    "comment": f"Critère {column_comment} (niveau {criteria.level})",
+                    "lambda": partial(get_latest_diagnosis_criteria, criteria_id=criteria.id),
+                }
+            ]
 
         # FIXME select_related for better perf
         objects = get_user_model().objects.filter(is_job_seeker=True).all()
