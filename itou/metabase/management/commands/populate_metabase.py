@@ -15,6 +15,7 @@ from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext, gettext_lazy as _
 from tqdm import tqdm
 
+from itou.approvals.models import Approval, PoleEmploiApproval
 from itou.eligibility.models import AdministrativeCriteria, EligibilityDiagnosis
 from itou.job_applications.models import JobApplication, JobApplicationWorkflow
 from itou.prescribers.models import PrescriberOrganization
@@ -23,7 +24,7 @@ from itou.utils.address.departments import DEPARTMENT_TO_REGION, DEPARTMENTS
 
 
 # FIXME
-ENABLE_WIP_MODE = True
+ENABLE_WIP_MODE = False
 WIP_MODE_ROWS_PER_TABLE = 50
 
 # Bench results for self.populate_diagnostics()
@@ -238,6 +239,29 @@ def compose_two_lambdas(f, g):
     # `RecursionError: maximum recursion depth exceeded` error
     # when composing convert_boolean_to_int and c["lambda"].
     return lambda *a, **kw: f(g(*a, **kw))
+
+
+POLE_EMPLOI_APPROVAL_SUFFIX_TO_MEANING = {
+    "P": "Prolongation",
+    "E": "Extension",
+    "A": "Interruption",
+    "S": "Suspension",
+}
+
+
+def get_approval_type(approval):
+    if isinstance(approval, Approval):
+        return "Pass IAE"
+    elif isinstance(approval, PoleEmploiApproval):
+        if len(approval.number) == 12:
+            return "Agrément PE"
+        elif len(approval.number) == 15:
+            suffix = approval.number[12]
+            return f"{POLE_EMPLOI_APPROVAL_SUFFIX_TO_MEANING[suffix]} PE"
+        else:
+            raise ValueError("Unexpected PoleEmploiApproval.number length")
+    else:
+        raise ValueError("Unknown approval type.")
 
 
 class MetabaseDatabaseCursor:
@@ -651,6 +675,21 @@ class Command(BaseCommand):
 
         self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
 
+    def populate_approvals(self):
+        table_name = "pass_agréments"
+
+        # WIPP
+        table_columns = [
+            {"name": "type", "type": "varchar", "comment": "FIXME", "lambda": get_approval_type},
+            {"name": "date_début", "type": "date", "comment": "Date de début", "lambda": lambda o: o.start_at},
+            {"name": "date_fin", "type": "date", "comment": "Date de fin", "lambda": lambda o: o.end_at},
+        ]
+
+        # FIXME select_related for better perf
+        objects = [a for a in Approval.objects.all()] + [pa for pa in PoleEmploiApproval.objects.all()]
+
+        self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
+
     def populate_job_seekers(self):
         table_name = "candidats"
 
@@ -772,6 +811,7 @@ class Command(BaseCommand):
     def populate_metabase(self):
         with MetabaseDatabaseCursor() as cur:
             self.cur = cur
+            self.populate_approvals()
             self.populate_job_applications()
             self.populate_job_seekers()
             self.populate_siaes()
