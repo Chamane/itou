@@ -225,9 +225,11 @@ def get_latest_diagnosis_criteria(job_seeker, criteria_id):
         return latest_diagnosis.administrative_criteria.filter(id=criteria_id).exists()
     return None
 
+
 def convert_boolean_to_int(b):
     # True => 1, False => 0, None => None.
     return None if b is None else int(b)
+
 
 def compose_two_lambdas(f, g):
     # Compose two lambda methods.
@@ -236,6 +238,7 @@ def compose_two_lambdas(f, g):
     # `RecursionError: maximum recursion depth exceeded` error
     # when composing convert_boolean_to_int and c["lambda"].
     return lambda *a, **kw: f(g(*a, **kw))
+
 
 class MetabaseDatabaseCursor:
     def __enter__(self):
