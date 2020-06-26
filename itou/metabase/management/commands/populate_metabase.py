@@ -23,7 +23,7 @@ from itou.utils.address.departments import DEPARTMENT_TO_REGION, DEPARTMENTS
 
 
 # FIXME
-ENABLE_WIP_MODE = False
+ENABLE_WIP_MODE = True
 WIP_MODE_ROWS_PER_TABLE = 50
 
 # Bench results for self.populate_diagnostics()
@@ -225,6 +225,17 @@ def get_latest_diagnosis_criteria(job_seeker, criteria_id):
         return latest_diagnosis.administrative_criteria.filter(id=criteria_id).exists()
     return None
 
+def convert_boolean_to_int(b):
+    # True => 1, False => 0, None => None.
+    return None if b is None else int(b)
+
+def compose_two_lambdas(f, g):
+    # Compose two lambda methods.
+    # https://stackoverflow.com/questions/16739290/composing-functions-in-python
+    # I had to use this to solve a cryptic
+    # `RecursionError: maximum recursion depth exceeded` error
+    # when composing convert_boolean_to_int and c["lambda"].
+    return lambda *a, **kw: f(g(*a, **kw))
 
 class MetabaseDatabaseCursor:
     def __enter__(self):
@@ -337,6 +348,13 @@ class Command(BaseCommand):
         if ENABLE_WIP_MODE:
             table_name = f"{table_name}_wip"
             objects = objects[:WIP_MODE_ROWS_PER_TABLE]
+
+        # Transform boolean fields into 0/1 integer fields.
+        # Metabase cannot sum or average boolean columns ¯\_(ツ)_/¯
+        for c in table_columns:
+            if c["type"] == "boolean":
+                c["type"] = "integer"
+                c["lambda"] = compose_two_lambdas(convert_boolean_to_int, c["lambda"])
 
         self.log(f"Injecting {len(objects)} records into table {table_name}:")
 
