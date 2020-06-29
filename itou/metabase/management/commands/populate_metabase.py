@@ -686,6 +686,7 @@ class Command(BaseCommand):
         ]
 
         # FIXME select_related for better perf
+        # WIPP how to mix while WIP mode is enabled??
         objects = [a for a in Approval.objects.all()] + [pa for pa in PoleEmploiApproval.objects.all()]
 
         self.populate_table(table_name=table_name, table_columns=table_columns, objects=objects)
